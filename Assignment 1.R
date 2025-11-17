@@ -66,7 +66,7 @@ df_phoronida2$country
 # Counting how many samples taken from each country
 df_phoronida2 %>%
   group_by(country) %>%
-  unique()
+  count()
 
 # kept the NA/unspecified countries/unrecoverable countries because my main comparison is between 2 specific countries, so those unknown samples don't impact the final result, and instead I'm able to see how many total samples were taken worldwide
 
