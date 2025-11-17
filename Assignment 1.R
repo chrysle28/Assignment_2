@@ -40,8 +40,22 @@ df_test2 <- df_phoronida2[, c("species", "bin_uri")]
 df_test2
 
 # Renaming the countries/ocean column to country
+#df_phoronida2 <- df_phoronida2 %>%
+ # rename(country = "country/ocean")
+
+#EDIT: changing this step to filtering out oceans, unrecoverable, unspecified, N/A if not needed for downstream analysis
+df_phoronida2$`country/ocean`
+df_phoronida2 <- df_phoronida2 %>%
+  filter(!is.na(`country/ocean`),
+         `country/ocean` != "Unspecified country",
+         `country/ocean` != "Unrecoverable",
+         !grepl("ocean", `country/ocean`, ignore.case = T))
+table(df_phoronida2$"country/ocean")
+
+#EDIT: now if desired, can rename countries/ocean column to country
 df_phoronida2 <- df_phoronida2 %>%
   rename(country = "country/ocean")
+table(df_phoronida2$country)
 
 # Looking at BIN column
 df_phoronida2$bin_uri
@@ -52,9 +66,7 @@ df_phoronida2$country
 # Counting how many samples taken from each country
 df_phoronida2 %>%
   group_by(country) %>%
-  count()
-
-table(df_phoronida2$country)
+  unique()
 
 # kept the NA/unspecified countries/unrecoverable countries because my main comparison is between 2 specific countries, so those unknown samples don't impact the final result, and instead I'm able to see how many total samples were taken worldwide
 
@@ -100,27 +112,48 @@ df_PC
 
 # Finding unique bins in Panama and Canada
 df_PC %>%
+  filter(!is.na(bin_uri)) %>%
   group_by(country) %>%
   summarise(unique_BINs = n_distinct(bin_uri))
 # 6 in Canada, 9 in Panama
+#EDIT: previous code did not remove rows where bin_uri was missing, so N/A was counted as a unique BIN
 
 # ---- Plotting Graphs ----
 ## ---- Bar Plots ----
+#EDIT: since this is a global comparison, would be nice to know the average number of samples taken from each country
+mean_samples <- mean(table(df_phoronida2$country))
 
+#EDIT: made a horizontal bar graph as there were many data columns, ordered it from largest to smallest, and added line representing avereage number of samples
 # Bar plot to compare how many samples were taken from each country
 df_phoronida2 %>%
   count(country) %>%
-  ggplot(aes(x = country, y = n, fill = country)) +
+  mutate(country = fct_reorder(country, n)) %>%
+  ggplot(aes(x = n, y = country, fill = country)) +
   geom_col() +
   labs(
-    title = "Phoronida Samples",
-    x = "Country",
-    y = "Number of Samples"
+    title = "Count of Phoronida Samples in Different Countries",
+    x = "Number of samples",
+    y = "Country"
   ) +
+  geom_vline(xintercept = mean_samples,
+             color = "black",
+             linewidth = 0.7,
+             linetype = "dashed") +
+  annotate(
+    "text",
+    x = 80,
+    y = 10,
+    label = paste0("Average number of samples = ", round(mean_samples, 1))
+  ) +
+  geom_curve(aes(x = 80, y = 9.5, xend = mean_samples, yend = 7),
+                 curvature = -0.3,
+                 size = 0.2,
+                 arrow = arrow(length = unit(0.05, "npc"), type = "open")) +
   theme_minimal() +
   theme(
     legend.position = "none",
-    axis.text.x = element_text(angle = 45, hjust = 1)
+    axis.title.y = element_text(margin = margin(r = 15)),
+    axis.title.x = element_text(margin = margin(t = 10))
   )
 
 # Bar plot to compare how many samples were taken from Panama and Canada
@@ -168,6 +201,23 @@ ggsave("../figs/boxplot_PC_bins.png", plot = PC_bins, width = 6, height = 4, dpi
 
 # Subset of Panama
 df_panama <- subset(df_phoronida2, country == "Panama")
+
+#EDIT: new function create_mat to streamline formatting of other datasets for accumulation curve creation (e.g. for different countries, taxa, subsets, etc)
+create_mat <- function(df) {
+  df_x <- df %>%
+    filter(!is.na(bin_uri)) %>%
+    distinct(processid, bin_uri) %>%
+    mutate(presence = as.integer(1)) %>%
+    pivot_wider(
+      names_from = bin_uri,
+      values_from = presence,
+      values_fill = list(presence = 0)
+    ) %>% as.data.frame() 
+  rownames(df_x) <- make.unique(df_x$processid)
+  df_x <- df_x %>% select(-processid)
+  return(df_x)
+}
+mat_phoronida2 <- create_mat(df_phoronida2) #EDIT: example usage of create_matrix function
 
 # Create matrix
 mat_panama <- df_panama %>%
@@ -282,4 +332,55 @@ capture.output(wilcox_longitude, file = "../output/wilcox_test_lon.txt")
 
 # small p-value, so the difference in longitudes between the two countries is statistically significant
 # sampling sites in Panama and Canada are geographically distinct along the east–west axis (longitude)
+
+#EDIT: if instead the goal was to explore the difference in latitudinal/longitudinal ranges of BINs, then calculate the lat/lon ranges of the BINs per country
+bin_ranges_p <- df_coordp %>%
+  filter(!is.na(bin_uri)) %>%
+  group_by(bin_uri) %>%
+  summarize(lat_range = max(latitude) - min(latitude),
+            lon_range = max(longitude) - min(longitude),
+            .groups = "drop")
+
+bin_ranges_c <- df_coordc %>%
+  filter(!is.na(bin_uri)) %>%
+  group_by(bin_uri) %>%
+  summarise(
+    lat_range = max(latitude) - min(latitude),
+    lon_range = max(longitude) - min(longitude),
+    .groups = "drop"
+  )
+
+#EDIT: merging into one dataframe for Wilcoxon testing
+bin_ranges_p$country <- "Panama"
+bin_ranges_c$country <- "Canada"
+bin_ranges_all <- bind_rows(bin_ranges_p, bin_ranges_c)
+
+#EDIT: before even running the Wilcoxon test, can predict that the results will not be statistically significant by looking at the dataframe; most of the BINs were taken from one sampling site, so this dataset is not suitable for seeing if there is actually a real difference in lat/lon ranges of BINs between the two countries
+view(bin_ranges_all)
+wilcox.test(lat_range ~ country, data = bin_ranges_all)
+wilcox.test(lon_range ~ country, data = bin_ranges_all)
+
+#EDIT: violin + boxplots to visualize distribution - majority of BINs are one-site samples
+ggplot(bin_ranges_all, aes(x = country, y = lat_range, fill = country)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_boxplot(width = 0.1) +
+  theme_minimal() +
+  labs(
+    title = "Latitudinal Range Distribution per BIN",
+    x = "Country",
+    y = "Latitudinal range"
+  ) +
+  theme(legend.position = "none")
+
+ggplot(bin_ranges_all, aes(x = country, y = lon_range, fill = country)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_boxplot(width = 0.1) +
+  theme_minimal() +
+  labs(
+    title = "Longitudinal Range Distribution per BIN",
+    x = "Country",
+    y = "Longitudinal range"
+  ) +
+  theme(legend.position = "none")
+
 
